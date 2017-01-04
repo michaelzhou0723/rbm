@@ -2,20 +2,16 @@ import numpy as np
 
 class BinaryRBM:
     def __init__(self, hid_units, learning_rate = 0.1, epochs = 20, batch_size = 100, cdk = 1, persistent = False,
-                 measure = 'reconstruction_error'):
+                 measure = 're'):
         self.num_hid = hid_units
         self.learning_rate = learning_rate
         self.epochs = epochs
         self.batch_size = batch_size
         self.cdk = cdk
         self.persistent = persistent
-        if measure == 'reconstruction_error':
-            self.measure_progress = self._get_recon_error
-        elif measure == 'pseudo_likelihood':
-            self.measure_progress = self._get_pseudo_likelihood
-        else:
+        if measure not in ('re', 'pl'):
             raise ValueError
-        self.hid_prob = None
+        self.measure = measure
         
     def _feed(self, data, labels = None):
         self.data = data
@@ -31,6 +27,7 @@ class BinaryRBM:
         
     def train(self, data, labels = None):
         self._feed(data, labels)
+        self.hid_prob = None
         batch_gen = self._generate_minibatch()
         num_iter = data.shape[0] // self.batch_size
         for i in range(self.epochs):
@@ -52,8 +49,11 @@ class BinaryRBM:
                 self.weights += self.learning_rate * dw
                 self.vis_bias += self.learning_rate * dvb
                 self.hid_bias += self.learning_rate * dhb
-                score += self.measure_progress(vis_state)
-            self._log(score)
+                if self.measure == 're':
+                    score += self._get_recon_error(vis_state)
+                elif self.measure == 'pl':
+                    score += self._get_pseudo_likelihood()
+            self._log_progress(i, score)
             
     def _run_gibbs(self, k):
         for i in range(k):
@@ -63,12 +63,14 @@ class BinaryRBM:
             self.hid_prob = self.hid_from_vis(vis_state)
         
     def classify(self, data):
-        vis_bin = np.concatenate(data, np.zeros((data.shape[0], self.label_count)), axis = 1)
+        if self.labels is None:
+            raise ValueError
+        vis_bin = np.concatenate((data, np.zeros((data.shape[0], self.label_count))), axis = 1)
         hid_prob = self.hid_from_vis(vis_bin)
         hid_bin = hid_prob > np.random.uniform(size = hid_prob.shape)
         vis_prob = self.vis_from_hid(hid_bin)
         vis_bin = vis_prob > np.random.uniform(size = vis_prob.shape)
-        return np.argmax(vis_bin[:, self.data.shape[1]:])
+        return np.argmax(vis_bin[:, self.data.shape[1]:], axis = 1)
      
     def _generate_minibatch(self):
         num_train = self.data.shape[0]
@@ -76,7 +78,7 @@ class BinaryRBM:
         while True:
             shuffled_ind = np.random.permutation(num_train)
             for i in range(0, num_batches, self.batch_size):
-                ind = shuffled_ind[i:i+batch_size]
+                ind = shuffled_ind[i:i+self.batch_size]
                 yield self.data[ind, :], None if self.labels is None else self.labels[ind]
 
     def _concat_units(self, data, labels):
@@ -85,23 +87,33 @@ class BinaryRBM:
         label_units[np.arange(total_labels), labels] = 1
         return np.concatenate((data, label_units), axis = 1)
     
-    def _get_free_energy(self, X):
-        return -np.dot(X, self.vis_bias.T) - np.logsumexp(0, np.dot(X, self.weights) + self.hid_bias)
+    def _get_free_energy(self, v):
+        return -np.dot(v, self.vis_bias.T) - np.logaddexp(0, np.dot(v, self.weights) + self.hid_bias).sum(axis = 1)
     
-    def _get_recon_error(self, vis_state):
-        return np.sum((vis_state - self.vis_prob) ** 2) / self.batch_size
+    def _get_recon_error(self, v):
+        return np.sum((v - self.vis_prob) ** 2) / self.batch_size
         
-    def _get_pseudo_likelihood(self, vis_state):
-        pass
+    def _get_pseudo_likelihood(self):
+        v = self.vis_prob > np.random.uniform(size = self.vis_prob.shape)
+        rand_ind = np.random.randint(0, self.num_vis, (v.shape[0],))
+        u = v.copy()
+        u[np.arange(u.shape[0]), rand_ind] = 1 - u[np.arange(u.shape[0]), rand_ind]
+        return self.num_vis * np.log(self.sigmoid(self._get_free_energy(u) - self._get_free_energy(v))).sum()
         
-    def _log(self, score):
-        pass
-
-    def hid_from_vis(self, vis_state):
-        return self.sigmoid(np.dot(vis_state, self.weights) + self.hid_bias)
+    def _log_progress(self, epoch, score):
+        print('Epoch {}:  '.format(epoch + 1), end = '')
+        if self.measure == 're':
+            print('Reconstruction Error {}'.format(score))
+        else:
+            print('Pseudo Likelihood {}'.format(score))
+            
+    def hid_from_vis(self, v):
+        return self.sigmoid(np.dot(v, self.weights) + self.hid_bias)
         
-    def vis_from_hid(self, hid_state):
-        return self.sigmoid(np.dot(hid_state, self.weights.T) + self.vis_bias)
+    def vis_from_hid(self, h):
+        return self.sigmoid(np.dot(h, self.weights.T) + self.vis_bias)
         
     def sigmoid(self, x):
         return 1. / (1. + np.exp(-x))
+        
+    

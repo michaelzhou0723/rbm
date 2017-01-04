@@ -6,12 +6,7 @@ np.seterr(all='raise')
 
 train_imgs, train_lbls = load_MNIST()
 test_imgs, test_lbls = load_MNIST('test')
-model = BinaryRBM(500)
-model.feed(train_imgs / 255, train_lbls)
-model.train(epochs=20, batch_size=100, lrate=0.1, cdk=100, persistent=False)
-count = 0
-for i in range(10000):
-    lbl = model.classify(test_imgs[i] / 255, cdk=1)
-    if lbl != test_lbls[i]:
-        count += 1
-print('Classification Error: {}'.format(count / 10000))
+model = BinaryRBM(500, epochs=1, batch_size=10, learning_rate=0.1, cdk=1, persistent=True, measure='pl')
+model.train(train_imgs / 255, train_lbls)
+lbls = model.classify(test_imgs / 255)
+print('Classification Error: {}'.format(np.sum(np.not_equal(lbls, test_lbls)) / lbls.shape[0]))
